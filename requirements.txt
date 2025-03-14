@@ -1,0 +1,9 @@
+geopandas==0.14.3
+pyodbc==4.0.34
+Shapely==2.0.6
+SQLAlchemy==1.4.39
+fiona==1.9.5
+
+# Install arcpy using conda
+# Requires ArcGIS Pro license
+# conda install arcpy=3.3 -c esri
