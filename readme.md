@@ -11,17 +11,11 @@ Velkommen til mine python scripts, som hjælper mig i hverdagen så jeg ikke ska
 - [Licens](#licens)
 
 ## Introduktion
+Dette er en samling af Python-moduler, som jeg har udviklet for at automatisere og effektivisere mine daglige arbejdsopgaver. Modulerne tilbyder funktionalitet til alt fra logning og databaseforbindelser til email-afsendelse og GIS-databehandling.
 
-Dette projekt indeholder følgende Python-scripts:
+Hver modul er designet til at løse specifikke problemer, jeg ofte støder på, og gør det muligt at genbruge kode på tværs af forskellige projekter. Denne modulsamling sparer mig for tid og sikrer konsistente resultater i mine scripts.
 
-- `LK_boundingBox.py`: Indeholder klassen `BoundingBox`, som håndterer geografiske bounding boxes, herunder opdeling og arealberegning.
-- `LK_DatabaseConnections.py`: Håndterer databaseforbindelser og indeholder funktioner til at oprette og administrere disse forbindelser.
-- `LK_emailer.py`: Indeholder funktioner til at sende e-mails ved hjælp af forskellige e-mail-tjenester.
-- `LK_FileGeodatabase_info.py`: Indeholder funktioner som returnere en pandas dataframe med informationer om en fil-geodatabase
-- `LK_gis_helpers.py`: Indeholder hjælpefunktioner til geografiske informationssystemer (GIS).
-- `LK_LKuuid.py`: Indeholder funktionen `getUUID`, som genererer eller henter en unik UUID fra en fil.
-- `LK_logger.py`: Håndterer logning af beskeder og fejl i projektet.
-- `LK_unPack.py`: Indeholder funktioner til at pakke og udpakke filer og mapper.
+Modulerne kan bruges individuelt eller i kombination for at bygge mere komplekse applikationer og databehandlingsflows.
 
 ## Installation
 
@@ -32,16 +26,52 @@ git clone <repository-url>
 cd PythonScripts
 pip install -r requirements.txt
 ```
+Der kan være flere requirements som ikke lige er nævnt, men hvis det er tilfældet, så hører jeg gerne om det, så jeg kan rette filen.
 
 ## Brug
 
-For at bruge et af modulerne, kan du importere det i din Python-kode:
+For at bruge et af modulerne, kan du importere det i din Python-kode f.eks.:
 
 ```python
-import modulnavn
+from LK_logger import Logger
 ```
 
 Se den medfølgende dokumentation for hvert modul for specifikke brugsanvisninger.
+
+## Moduler
+
+### LK_boundingBox
+* Er blevet en integreret del af LK_WFS
+
+### LK_DatabaseConnections
+* Opretter en connection, engine og cursor til en database
+
+### LK_emailer
+* Sender en mail, evt. med en vedhæftet fil, kan håndtere html eller alm. tekst
+
+### LK_FileGeodatabase_Info
+* Finder info om en GeoDatabase, alle featureclasses, deres fields m.m.
+* Kan muligvis også bruges på en SDE connection, er ikke helt testet færdigt.
+
+### LK_gis_helpers
+
+### LK_logger
+* Bruges til at logge forskellige steps i ens scripts.
+* Formatet er:
+__2025-03-11 09:15:53 : INFO     : Starting__
+
+* Input kan være info, warning eller critical, kan også tjekke om der er warning eller critical i ens log
+
+### LK_unPack
+* Bruges til at unpacke zip-filer, kan overholde mappestrukturen i filen eller ej
+
+### LK_uuid
+* Opretter en fil med et uuid, bruges når der køres statestik med LK_DatabaseConnections
+
+### LK_WFS
+* Bruges til at hente WFS data, svaret er en GeoPandas Dataframe
+
+
 
 ## Bidrag
 
