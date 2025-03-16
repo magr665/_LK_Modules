@@ -51,18 +51,22 @@ class WFS:
         **kwargs: Valgfri nøgleordsargumenter
         - username (str): Brugernavn til autentificering
         - password (str): Adgangskode til autentificering
-        - bbox (list): Bounding box koordinater [minx, miny, maxx, maxy]
-        - version (str): WFS version, standard er nyeste understøttede
-        - maxfeatures (int): Maks antal features der hentes
+        - bbox (list): Bounding box koordinater [minx, miny, maxx, maxy], hvis ikke angivet, findes bounding box i GetCapabilities responsen
+        - version (str): WFS version, standard er nyeste understøttede, hvis ikke angiivet, findes version i GetCapabilities responsen
+        - maxfeatures (int): Maks antal features der hentes, standard er 90% af MaxFeatures i GetCapabilities responsen
         - debug (bool): Aktiver debug output
-        - outputFormat (str): Ønsket output format
 
     Attributter:
-        operations (dict): Tilgængelige WFS operationer
-        feature_types (list): Liste over tilgængelige feature typer
-        bboxes (list): Liste over bounding boxes
-        maxfeatures (int): Maksimalt antal features der kan hentes
+        - operations (dict): Tilgængelige WFS operationer
+        - feature_types (dict): En dict med feature typer og antal features for den angivne bbox eller default bbox
+        - bboxes (list): Liste over bounding boxes
+        - maxfeatures (int): Maksimalt antal features der kan hentes
+        - version (str): WFS version
 
+    Metoder:
+        - get_feature(feature_name): Henter features fra WFS-tjenesten som en GeoDataFrame
+            - feature_name (str): Navnet på det ønskede feature lag
+            - clip_gdf (bool): Hvis True, klippes GeoDataFrame til bounding box (standard er True)
     Raises:
         ValueError: Hvis påkrævede parametre mangler eller er ugyldige
     """
@@ -73,15 +77,15 @@ class WFS:
         
         ## check if debug is set
         if hasattr(self, 'debug'):
-            self._debug = self.debug
+            self.__debug = self.debug
         else:
-            self._debug = False
+            self.__debug = False
 
         ## initialize params
         self.url = url
-        self.params = {
+        self.__params = {
             'service': 'WFS',
-            'request': 'getCapabilities',
+            'request': 'GetCapabilities',
         }
         
         ## check if username and password are provided together and add to params
@@ -89,20 +93,25 @@ class WFS:
             raise ValueError('Both username and password must be provided')
 
         if hasattr(self, 'username') and hasattr(self, 'password'):
-            self.params['username'] = self.username
-            self.params['password'] = self.password
+            self.__params['username'] = self.username
+            self.__params['password'] = self.password
         else:
             self.username = None
-            self.password = None        
+            self.password = None
 
         ## get capabilities
-        response = requests.get(self.url, params=self.params)
+        url = requests.Request('GET', self.url, params=self.__params).prepare().url
+        if self.__debug: print('GetCapabilities url:', url)
+        response = requests.get(url)
         root = etree.XML(response.content)
-        self.getCapabilitiesRoot = root
+        if self.__debug: 
+            print('GetCapabilities response:', root)
+        self.__get_capabilities_root = root
         
         ## find all operation names in root element
-        self.operations = self._get_operation_names()
-        self.feature_types = self._get_feature_types()
+        self.operations = self.__get_operation_names()
+        if self.__debug: print(self.operations)
+        self.__get_maxfeatures()
 
         ## set default values
         if not hasattr(self, 'maxfeatures'):
@@ -122,12 +131,16 @@ class WFS:
             if len(self.bbox) != 4:
                 raise ValueError('bbox must be a list of coordinates [minx, miny, maxx, maxy]')
             self.bboxes = [[str(b) for b in self.bbox]]
-            self._default_bbox = self.bboxes[0]
+            self.__default_bbox = self.bboxes[0]
+            self.__missing_default_bbox = False
         else:
             self.bboxes = None
-            self._default_bbox = None
+            self.__default_bbox = None
+            self.__missing_default_bbox = True
     
-    def _get_bbox(self, typename):
+        self.feature_types = self.__get_feature_types()
+
+    def __get_bbox(self, typename):
         """
         Finder bounding box for et feature type fra WFS-tjenestens GetCapabilities respons.
         
@@ -145,12 +158,21 @@ class WFS:
             ValueError: Hvis bounding box ikke kan findes eller hvis der opstår fejl
         """
         try:
-            feature_item = self.getCapabilitiesRoot.find(f'.//{{*}}FeatureType[{{*}}Title="{typename}"]', namespaces=self.getCapabilitiesRoot.nsmap)
-            if feature_item is not None:    
-                xMin = feature_item.find('.//{*}LowerCorner').text.split(' ')[0]
-                yMin = feature_item.find('.//{*}LowerCorner').text.split(' ')[1]
-                xMax = feature_item.find('.//{*}UpperCorner').text.split(' ')[0]
-                yMax = feature_item.find('.//{*}UpperCorner').text.split(' ')[1]
+            feature_item = self.__get_capabilities_root.find(f'.//{{*}}FeatureType[{{*}}Title="{typename}"]', namespaces=self.__get_capabilities_root.nsmap)
+            if feature_item is not None:
+                try:
+                    xMin = feature_item.find('.//{*}LowerCorner').text.split(' ')[0]
+                    yMin = feature_item.find('.//{*}LowerCorner').text.split(' ')[1]
+                    xMax = feature_item.find('.//{*}UpperCorner').text.split(' ')[0]
+                    yMax = feature_item.find('.//{*}UpperCorner').text.split(' ')[1]
+                except:
+                    xMin = feature_item.find('.//{{*}}LatLongBoundingBox', namespaces=self.__get_capabilities_root.nsmap).attrib['minx']
+                    yMin = feature_item.find('.//{{*}}LatLongBoundingBox', namespaces=self.__get_capabilities_root.nsmap).attrib['miny']
+                    xMax = feature_item.find('.//{{*}}LatLongBoundingBox', namespaces=self.__get_capabilities_root.nsmap).attrib['maxx']
+                    yMax = feature_item.find('.//{{*}}LatLongBoundingBox', namespaces=self.__get_capabilities_root.nsmap).attrib['maxy']
+
+                if any(coord is None for coord in [xMax, yMax, xMin, yMin]):
+                    raise ValueError('Could not find bounding box in GetCapabilities response, please provide bbox as a parameter')
 
                 gdf_bbox = box(xMin, yMin, xMax, yMax)
 
@@ -158,15 +180,15 @@ class WFS:
                 gdf = gpd.GeoDataFrame({'geometry': [gdf_bbox]})
                 gdf.crs = "EPSG:4326"
                 gdf = gdf.to_crs("EPSG:25832")
-                self._default_bbox = [str(xy) for xy in list(gdf.geometry[0].bounds)]
-                return self._default_bbox
+                self.__default_bbox = [str(xy) for xy in list(gdf.geometry[0].bounds)]
+                return self.__default_bbox
             else:
                 raise ValueError('Could not find bounding box in GetCapabilities response, please provide bbox as a parameter')
         except Exception as e: 
-            if self._debug: print(e)
+            if self.__debug: print(e)
             raise ValueError('Could not find bounding box in GetCapabilities response', e)
 
-    def _get_operation_names(self):
+    def __get_operation_names(self):
         """
         Henter tilgængelige WFS operationer fra GetCapabilities responsen.
         
@@ -190,10 +212,11 @@ class WFS:
             }
         """
         operation_names = {}
-        operation_elements = self.getCapabilitiesRoot.findall(f'.//{{*}}Operation', namespaces=self.getCapabilitiesRoot.nsmap)
+        operation_elements = self.__get_capabilities_root.findall(f'.//{{*}}Operation', namespaces=self.__get_capabilities_root.nsmap)
         for element in operation_elements:
             try:
-                op_name  = element.attrib['name']
+                operation_name  = element.attrib['name']
+                if self.__debug: print(f'Getting operation: {operation_name}')
                 parameters = {}
                 for child in element:
                     vals = []
@@ -202,27 +225,32 @@ class WFS:
                         for val in child:
                             vals = [v.text for v in val]
                         parameters[param_name] = vals
-                operation_names[op_name] = parameters
+                operation_names[operation_name] = parameters
             except Exception as e:
-                if self._debug: print(e)
+                if self.__debug: print(e)
                 pass
-        try:
-            constraint = self.getCapabilitiesRoot.find('.//{*}Constraint[@name="CountDefault"]', namespaces=self.getCapabilitiesRoot.nsmap)
-            if self._debug: print(constraint.attrib)
-            if constraint is not None:
-                default_value = constraint.find('.//{*}DefaultValue', namespaces=self.getCapabilitiesRoot.nsmap)
-                if default_value is not None:
-                    operation_names['MaxFeatures'] = int(default_value.text)
-                else:
-                    operation_names['MaxFeatures'] = 10000
-            else:
-                operation_names['MaxFeatures'] = 10000
-        except Exception as e:
-            if self._debug: print(f"Error getting MaxFeatures: {e}")
-            operation_names['MaxFeatures'] = 10000
         return operation_names
+        
+    def __get_maxfeatures(self):
+        """
+        Henter værdien for MaxFeatures fra GetCapabilities responsen.
+        """
+        try:
+            constraint = self.__get_capabilities_root.find('.//{*}Constraint[@name="CountDefault"]', namespaces=self.__get_capabilities_root.nsmap)
+            if self.__debug: print('Getting maxfeatures')
+            if constraint is not None:
+                default_value = constraint.find('.//{*}DefaultValue', namespaces=self.__get_capabilities_root.nsmap)
+                if default_value is not None:
+                    self.operations['MaxFeatures'] = int(default_value.text)
+                else:
+                    self.operations['MaxFeatures'] = 10000
+            else:
+                self.operations['MaxFeatures'] = 10000
+        except Exception as e:
+            if self.__debug: print(f"Error getting MaxFeatures: {e}")
+            self.operations['MaxFeatures'] = 10000
 
-    def _get_feature_types(self):
+    def __get_feature_types(self):
         """
         Henter en liste over tilgængelige feature typer fra WFS-tjenesten.
         
@@ -232,30 +260,31 @@ class WFS:
         
         Returnerer:
             list: Liste over feature type titler
-            
-        Bemærk:
-            De tekniske navne gemmes i self._feature_translations
+
         """
-        feature_types = []
+        feature_types = {}
         feature_translations = {}
-        feature_type_elements = self.getCapabilitiesRoot.findall(f'.//{{*}}FeatureType', namespaces=self.getCapabilitiesRoot.nsmap)
+        feature_type_elements = self.__get_capabilities_root.findall(f'.//{{*}}FeatureType', namespaces=self.__get_capabilities_root.nsmap)
         for element in feature_type_elements:
             try:
-                feature_name = element.find(f'.//{{*}}Name', namespaces=self.getCapabilitiesRoot.nsmap).text
-                feature_title = element.find(f'.//{{*}}Title', namespaces=self.getCapabilitiesRoot.nsmap).text
-                feature_types.append(feature_title)
+                feature_name = element.find(f'.//{{*}}Name', namespaces=self.__get_capabilities_root.nsmap).text
+                feature_title = element.find(f'.//{{*}}Title', namespaces=self.__get_capabilities_root.nsmap).text
+                if self.__debug: print(f'Feature name: {feature_name}, Feature title: {feature_title}')
+
+                feature_types[feature_title] = self.__get_hits(feature_name.split(':')[-1], self.__default_bbox, initial_hits=True)
+
                 if feature_title is not None:
-                    feature_translations[feature_title] = feature_name
+                    feature_translations[feature_title] = feature_name.split(':')[-1]
                 else:
-                    feature_translations[feature_name] = feature_name
+                    feature_translations[feature_name.split(':')[-1]] = feature_name.split(':')[-1]
             except Exception as e:
-                if self._debug: print(e)
+                if self.__debug: print(e)
                 pass
-        self._feature_translations = feature_translations
+        self.__feature_translations = feature_translations
         return feature_types
     
 
-    def _split_bbox(self, bbox):
+    def __split_bbox(self, bbox):
         """
         Opdeler en bounding box i to mindre bounding boxes.
         
@@ -285,7 +314,7 @@ class WFS:
             self.bboxes.append(bb2)
         
     
-    def _get_hits(self, feature_name, bbox):
+    def __get_hits(self, feature_name, bbox, initial_hits=False):
         """
         Henter antallet af features fra WFS-tjenesten.
         
@@ -304,27 +333,31 @@ class WFS:
         """
         params = {
             'version': self.version,
-            'bbox': ','.join(bbox),
             'resulttype': 'hits',
             'service': 'WFS',
             'request': 'GetFeature',
             'username': self.username,
             'password': self.password,
         }
+        if not initial_hits:
+            params['bbox'] = ','.join(bbox)
+        elif initial_hits and self.__missing_default_bbox is False:
+            params['bbox'] = ','.join(self.__default_bbox)
+
         if self.version in ('1.0.0', '1.1.0'):
             params['typeName'] = feature_name
         else:
             params['typeNames'] = feature_name
         
         wfs_url = requests.Request('GET', self.url, params=params).prepare().url
-        if self._debug: print('hits url: ', wfs_url)
+        if self.__debug: print('hits url: ', wfs_url)
         response = requests.get(wfs_url)
         root = etree.XML(response.content)
         hits = int(root.attrib['numberMatched'])
         return hits
     
 
-    def _get_features_gdf(self, feature_name, bbox):
+    def __get_features_gdf(self, feature_name, bbox):
         """
         Henter features fra WFS-tjenesten som en GeoDataFrame.
         
@@ -341,7 +374,7 @@ class WFS:
         Raises:
             ValueError: Hvis GeoDataFrame ikke kan læses fra WFS-responsen
         """
-        params = self.params
+        params = self.__params
         params['version'] = self.version
         params['bbox'] = ','.join(bbox)
         params['resulttype'] = 'results'
@@ -354,15 +387,15 @@ class WFS:
         if hasattr(self, 'outputFormat'):
             params['outputFormat'] = self.outputFormat
         wfs_url = requests.Request('GET', self.url, params=params).prepare().url
-        if self._debug: print('__get_features_gdf', wfs_url)
+        if self.__debug: print('___get_features_gdf', wfs_url)
         try:
-            return gpd.read_file(wfs_url)
+            return gpd.read_file(wfs_url, crs="EPSG:25832")
         except:
             # return gpd.read_file(wfs_url)
             raise ValueError('Could not read GeoDataFrame from WFS response')
 
 
-    def _clip_gdf(self, gdf):
+    def __clip_gdf(self, tmp_gdf):
         """
         Klipper en GeoDataFrame til bounding box defineret i WFS-objektet.
         
@@ -372,11 +405,18 @@ class WFS:
         Returnerer:
             GeoDataFrame: Klippet GeoDataFrame
         """
-        gdf = gdf.to_crs("EPSG:25832")
-        gdf_bbox = box(float(self._default_bbox[0]), float(self._default_bbox[1]), float(self._default_bbox[2]), float(self._default_bbox[3]))
+        # tmp_gdf = gdf.copy()
+        # tmp_gdf.crs = "EPSG:4326"
+        # tmp_gdf = tmp_gdf.to_crs("EPSG:25832")
+        gdf_bbox = box(float(self.__default_bbox[0]), float(self.__default_bbox[1]), float(self.__default_bbox[2]), float(self.__default_bbox[3]))
         gdf_bbox = gpd.GeoDataFrame({'geometry': [gdf_bbox]})
         gdf_bbox.crs = "EPSG:25832"
-        gdf = gpd.clip(gdf, gdf_bbox)
+        if self.__debug:
+            print('Clipping GeoDataFrame to bounding box')
+            print(float(self.__default_bbox[0]), float(self.__default_bbox[1]), float(self.__default_bbox[2]), float(self.__default_bbox[3]))
+            print(tmp_gdf.crs)
+            print(gdf_bbox.crs)
+        gdf = gpd.clip(tmp_gdf, gdf_bbox)
         return gdf
 
 
@@ -396,22 +436,21 @@ class WFS:
             >>> gdf = wfs.get_feature('kommuner')
         """
         if self.bboxes is None:
-            self.bboxes = [self._get_bbox(feature_name)]
-        if self._debug: print(f'Bounding boxes: {self.bboxes}')
-        feature_name = self._feature_translations[feature_name]
+            self.bboxes = [self.__get_bbox(feature_name)]
+        if self.__debug: print(f'Bounding boxes: {self.bboxes}')
+        feature_name = self.__feature_translations[feature_name]
         gdfs = []
         for bbox in self.bboxes:
-            hits = self._get_hits(feature_name, bbox)
+            hits = self.__get_hits(feature_name, bbox)
             if hits > self.maxfeatures:
                 print(f'Number of hits {hits} exceeds maxfeatures {self.maxfeatures}. Splitting bbox')
-                self._split_bbox(bbox)
+                self.__split_bbox(bbox)
             else:
-                gdf = self._get_features_gdf(feature_name, bbox)
+                gdf = self.__get_features_gdf(feature_name, bbox)
                 gdfs.append(gdf)
 
         self.gdfs = gdfs
-
-        gdf = pd.concat(gdfs, ignore_index=True)
+        gdf = pd.concat(gdfs, ignore_index=True)        
         gdf.drop_duplicates(inplace=True)
         for col in gdf.columns.to_list():
             if '.' in col:
@@ -419,6 +458,6 @@ class WFS:
 
         gdf['xTid'] = pd.Timestamp.now()
 
-        if clip_gdf:
-            gdf = self._clip_gdf(gdf)
+        if clip_gdf and self.__missing_default_bbox is False and len(gdf) > 0:
+            gdf = self.__clip_gdf(gdf)
         return gdf        
