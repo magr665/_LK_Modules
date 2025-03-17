@@ -66,7 +66,10 @@ class WFS:
     Metoder:
         - get_feature(feature_name): Henter features fra WFS-tjenesten som en GeoDataFrame
             - feature_name (str): Navnet på det ønskede feature lag
-            - clip_gdf (bool): Hvis True, klippes GeoDataFrame til bounding box (standard er True)
+            **kwargs: Valgfri nøgleordsargumenter
+                - count (int): Antal features der skal hentes
+                - clip_gdf (bool): Hvis True, klippes GeoDataFrame til bounding box (standard er True)
+
     Raises:
         ValueError: Hvis påkrævede parametre mangler eller er ugyldige
     """
@@ -453,6 +456,8 @@ class WFS:
         ## check if count is set
         if hasattr(self, 'count'):
             count = self.count
+        else:
+            count = None
 
         ## check if clip_gdf is set
         if hasattr(self, 'clip_gdf'):
@@ -472,7 +477,8 @@ class WFS:
             for bbox in bboxes:
                 hits = self.__get_hits(feature_name, bbox)
                 if hits > self.maxfeatures:
-                    print(f'Number of hits {hits} exceeds maxfeatures {self.maxfeatures}. Splitting bbox')
+                    if self.__debug:
+                        print(f'Number of hits {hits} exceeds maxfeatures {self.maxfeatures}. Splitting bbox')
                     for bb in self.__split_bbox(bbox):
                         bboxes.append(bb)
                 else:
