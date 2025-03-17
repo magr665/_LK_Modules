@@ -133,6 +133,20 @@ class Logger:
             self.info('******** DEBUGGING **********')
             self.info('*****************************')
 
+    def stars(self, msg, num=10):
+        """
+        Logger en besked med stjerner.
+
+        Parametre:
+        ----------
+        msg : str
+            Beskeden, der skal logges med stjerner.
+        num : int, valgfri
+            Antal stjerner, der skal vises på hver side af beskeden (standard: 10).
+        """
+        self.msg = f"{self.__get_time()} : INFO     : {'*' * num} {msg} {'*' * num}"
+        self.__write(self.msg)
+        
     def info(self, msg):
         """
         Logger en informationsbesked.

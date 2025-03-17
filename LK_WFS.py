@@ -115,9 +115,9 @@ class WFS:
 
         ## set default values
         if not hasattr(self, 'maxfeatures'):
-            self.maxfeatures = self.operations['MaxFeatures'] * .9
+            self.maxfeatures = self.operations['MaxFeatures'] * .98
         elif self.maxfeatures > self.operations['MaxFeatures']:
-            self.maxfeatures = self.operations['MaxFeatures'] * .9
+            self.maxfeatures = self.operations['MaxFeatures'] * .98
             print(f'MaxFeatures set to {self.maxfeatures}')
 
         if not hasattr(self, 'version'):
@@ -305,13 +305,11 @@ class WFS:
         if (maxx - minx) < (maxy - miny):
             bb1 = [str(minx), str(miny), str(maxx), str(miny + ((maxy - miny) / 2))]
             bb2 = [str(minx), str(miny + ((maxy - miny) / 2)), str(maxx), str(maxy)]
-            self.bboxes.append(bb1)
-            self.bboxes.append(bb2)
+            return [bb1, bb2]
         else:
             bb1 = [str(minx), str(miny), str(minx + ((maxx - minx) / 2)), str(maxy)]
             bb2 = [str(minx + ((maxx - minx) / 2)), str(miny), str(maxx), str(maxy)]
-            self.bboxes.append(bb1)
-            self.bboxes.append(bb2)
+            return [bb1, bb2]
         
     
     def __get_hits(self, feature_name, bbox, initial_hits=False):
@@ -357,7 +355,7 @@ class WFS:
         return hits
     
 
-    def __get_features_gdf(self, feature_name, bbox):
+    def __get_features_gdf(self, feature_name, bbox, count= None):
         """
         Henter features fra WFS-tjenesten som en GeoDataFrame.
         
@@ -382,8 +380,12 @@ class WFS:
         params['request'] = 'GetFeature'
         if self.version in ('1.0.0', '1.1.0'):
             params['typeName'] = feature_name
+            if count is not None:
+                params['maxfeatures'] = count
         else:
             params['typeNames'] = feature_name
+            if count is not None:
+                params['count'] = count
         if hasattr(self, 'outputFormat'):
             params['outputFormat'] = self.outputFormat
         wfs_url = requests.Request('GET', self.url, params=params).prepare().url
@@ -411,6 +413,12 @@ class WFS:
         gdf_bbox = box(float(self.__default_bbox[0]), float(self.__default_bbox[1]), float(self.__default_bbox[2]), float(self.__default_bbox[3]))
         gdf_bbox = gpd.GeoDataFrame({'geometry': [gdf_bbox]})
         gdf_bbox.crs = "EPSG:25832"
+        try:
+            tmp_gdf.set_crs("EPSG:25832", inplace=True)
+            tmp_gdf = tmp_gdf.to_crs("EPSG:25832")
+        except Exception as e:
+            if self.__debug: print(e)
+            pass
         if self.__debug:
             print('Clipping GeoDataFrame to bounding box')
             print(float(self.__default_bbox[0]), float(self.__default_bbox[1]), float(self.__default_bbox[2]), float(self.__default_bbox[3]))
@@ -420,13 +428,15 @@ class WFS:
         return gdf
 
 
-    def get_feature(self, feature_name, clip_gdf=True):
+    def get_feature(self, feature_name, **kwargs):
         """
         Henter features fra WFS-tjenesten som en GeoDataFrame.
         
         Parametre:
             feature_name (str): Navnet på det ønskede feature lag
+            **kwargs: Valgfri nøgleordsargumenter
             clip_gdf (bool): Hvis True, klippes GeoDataFrame til bounding box (standard: True)
+            count (int): Antal features der skal hentes (standard: maxfeatures)
             
         Returnerer:
             GeoDataFrame: Pandas GeoDataFrame med de hentede features
@@ -435,23 +445,43 @@ class WFS:
             >>> wfs = WFS('https://example.com/wfs')
             >>> gdf = wfs.get_feature('kommuner')
         """
+
+        for key, value in kwargs.items():
+            setattr(self, key, value)
+            # print(self, key, value)
+        
+        ## check if count is set
+        if hasattr(self, 'count'):
+            count = self.count
+
+        ## check if clip_gdf is set
+        if hasattr(self, 'clip_gdf'):
+            clip_gdf = self.clip_gdf
+        else:
+            clip_gdf = True
+
         if self.bboxes is None:
             self.bboxes = [self.__get_bbox(feature_name)]
         if self.__debug: print(f'Bounding boxes: {self.bboxes}')
         feature_name = self.__feature_translations[feature_name]
         gdfs = []
-        for bbox in self.bboxes:
-            hits = self.__get_hits(feature_name, bbox)
-            if hits > self.maxfeatures:
-                print(f'Number of hits {hits} exceeds maxfeatures {self.maxfeatures}. Splitting bbox')
-                self.__split_bbox(bbox)
-            else:
-                gdf = self.__get_features_gdf(feature_name, bbox)
-                gdfs.append(gdf)
+        bboxes = self.bboxes.copy()
+        if count is not None:
+            gdf = self.__get_features_gdf(feature_name, bboxes[0], count)
+        else:
+            for bbox in bboxes:
+                hits = self.__get_hits(feature_name, bbox)
+                if hits > self.maxfeatures:
+                    print(f'Number of hits {hits} exceeds maxfeatures {self.maxfeatures}. Splitting bbox')
+                    for bb in self.__split_bbox(bbox):
+                        bboxes.append(bb)
+                else:
+                    gdf = self.__get_features_gdf(feature_name, bbox)
+                    gdfs.append(gdf)
 
-        self.gdfs = gdfs
-        gdf = pd.concat(gdfs, ignore_index=True)        
-        gdf.drop_duplicates(inplace=True)
+            self.gdfs = gdfs
+            gdf = pd.concat(gdfs, ignore_index=True)        
+            gdf.drop_duplicates(inplace=True)
         for col in gdf.columns.to_list():
             if '.' in col:
                 gdf.rename(columns={col: col.replace('.', '_')}, inplace=True)
