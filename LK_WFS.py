@@ -66,10 +66,7 @@ class WFS:
     Metoder:
         - get_feature(feature_name): Henter features fra WFS-tjenesten som en GeoDataFrame
             - feature_name (str): Navnet på det ønskede feature lag
-            **kwargs: Valgfri nøgleordsargumenter
-                - count (int): Antal features der skal hentes
-                - clip_gdf (bool): Hvis True, klippes GeoDataFrame til bounding box (standard er True)
-
+            - clip_gdf (bool): Hvis True, klippes GeoDataFrame til bounding box (standard er True)
     Raises:
         ValueError: Hvis påkrævede parametre mangler eller er ugyldige
     """
@@ -90,7 +87,16 @@ class WFS:
             'service': 'WFS',
             'request': 'GetCapabilities',
         }
+
+        if hasattr(self, 'params'):
+            self.__params.update(self.params)
         
+        ## check if count is set
+        if hasattr(self, 'get_init_count'):
+            self.__get_init_count = self.get_init_count
+        else:
+            self.__get_init_count = False
+
         ## check if username and password are provided together and add to params
         if (hasattr(self, 'username') and not hasattr(self, 'password')) or (hasattr(self, 'password') and not hasattr(self, 'username')):
             raise ValueError('Both username and password must be provided')
@@ -113,18 +119,22 @@ class WFS:
         
         ## find all operation names in root element
         self.operations = self.__get_operation_names()
-        if self.__debug: print(self.operations)
-        self.__get_maxfeatures()
+        if self.__debug: print(f'self.operations: {self.operations}')
 
-        ## set default values
-        if not hasattr(self, 'maxfeatures'):
+        if hasattr(self, 'maxfeatures'):
+            if not isinstance(self.maxfeatures, int):
+                raise ValueError('maxfeatures must be an integer')
+            self.operations['MaxFeatures'] = self.maxfeatures
+        else:
+            self.__get_maxfeatures()
             self.maxfeatures = self.operations['MaxFeatures'] * .98
-        elif self.maxfeatures > self.operations['MaxFeatures']:
-            self.maxfeatures = self.operations['MaxFeatures'] * .98
-            print(f'MaxFeatures set to {self.maxfeatures}')
+        
 
         if not hasattr(self, 'version'):
-            self.version = sorted(self.operations['GetCapabilities']['AcceptVersions'], reverse=True)[0]
+            try:
+                self.version = sorted(self.operations['GetCapabilities']['AcceptVersions'], reverse=True)[0]
+            except:
+                self.version = '1.0.0'
         elif self.version not in self.operations['GetCapabilities']['AcceptVersions']:
             raise ValueError(f'Version {self.version} not supported. Supported versions are {self.operations["GetCapabilities"]["AcceptVersions"]}')
 
@@ -238,9 +248,9 @@ class WFS:
         """
         Henter værdien for MaxFeatures fra GetCapabilities responsen.
         """
+        if self.__debug: print('Getting maxfeatures')
         try:
             constraint = self.__get_capabilities_root.find('.//{*}Constraint[@name="CountDefault"]', namespaces=self.__get_capabilities_root.nsmap)
-            if self.__debug: print('Getting maxfeatures')
             if constraint is not None:
                 default_value = constraint.find('.//{*}DefaultValue', namespaces=self.__get_capabilities_root.nsmap)
                 if default_value is not None:
@@ -271,15 +281,19 @@ class WFS:
         for element in feature_type_elements:
             try:
                 feature_name = element.find(f'.//{{*}}Name', namespaces=self.__get_capabilities_root.nsmap).text
+                feature_name = feature_name.split(':')[-1]
                 feature_title = element.find(f'.//{{*}}Title', namespaces=self.__get_capabilities_root.nsmap).text
                 if self.__debug: print(f'Feature name: {feature_name}, Feature title: {feature_title}')
 
-                feature_types[feature_title] = self.__get_hits(feature_name.split(':')[-1], self.__default_bbox, initial_hits=True)
+                if self.__get_init_count == True:
+                    feature_types[feature_name] = self.__get_hits(feature_name, self.__default_bbox, initial_hits=True)
+                else:
+                    feature_types[feature_name] = 0
 
                 if feature_title is not None:
-                    feature_translations[feature_title] = feature_name.split(':')[-1]
+                    feature_translations[feature_title] = feature_name
                 else:
-                    feature_translations[feature_name.split(':')[-1]] = feature_name.split(':')[-1]
+                    feature_translations[feature_name] = feature_name.split(':')[-1]
             except Exception as e:
                 if self.__debug: print(e)
                 pass
@@ -350,12 +364,16 @@ class WFS:
         else:
             params['typeNames'] = feature_name
         
-        wfs_url = requests.Request('GET', self.url, params=params).prepare().url
-        if self.__debug: print('hits url: ', wfs_url)
-        response = requests.get(wfs_url)
-        root = etree.XML(response.content)
-        hits = int(root.attrib['numberMatched'])
-        return hits
+        try:
+            wfs_url = requests.Request('GET', self.url, params=params).prepare().url
+            if self.__debug: print('hits url: ', wfs_url)
+            response = requests.get(wfs_url)
+            root = etree.XML(response.content)
+            hits = int(root.attrib['numberMatched'])
+            return hits
+        except:
+            tmp_gdf = self.__get_features_gdf(feature_name, bbox)
+            return len(tmp_gdf)
     
 
     def __get_features_gdf(self, feature_name, bbox, count= None):
@@ -430,6 +448,53 @@ class WFS:
         gdf = gpd.clip(tmp_gdf, gdf_bbox)
         return gdf
 
+    def __descripe_feature(self, feature_name):
+        """
+        Henter metadata for et specifikt feature lag fra WFS-tjenesten.
+        
+        Funktionen danner en WFS GetFeature forespørgsel med resulttype=describeFeature
+        og returnerer metadata som en GeoDataFrame.
+        
+        Parametre:
+            feature_name (str): Navnet på det ønskede feature lag
+            
+        Returnerer:
+            GeoDataFrame: GeoDataFrame med metadata for det specifikke feature lag
+            
+        Raises:
+            ValueError: Hvis GeoDataFrame ikke kan læses fra WFS-responsen
+        """
+        params = self.__params
+        params['request'] = 'DescribeFeatureType'
+        params['version'] = self.version
+        params['typename'] = feature_name
+        wfs_url = requests.Request('GET', self.url, params=params).prepare().url
+        if self.__debug: 
+            print('Getting DescribeFeatureType')
+            print(wfs_url)
+
+        response = requests.get(wfs_url)
+        root = etree.XML(response.content)
+        ns = root.nsmap
+        ints = []
+        decimals = []
+        datetimes = []
+        fc_schema = []
+        for e in root.findall(f'.//{{*}}complexContent//{{*}}element', namespaces=ns):
+            e = e.attrib
+            dtype = e['type']
+            # if self.__debug: print(f'Element: {e} - Type: {dtype}')
+            if 'int' in dtype.lower():
+                ints.append(e['name'])
+            elif 'decimal' in dtype.lower():
+                decimals.append(e['name'])
+            elif 'date' in dtype.lower():
+                datetimes.append(e['name'])
+            else:
+                fc_schema.append(e['name'])
+        # if self.__debug: print(f'ints: {ints} - decimals: {decimals} - datetimes: {datetimes} - fc_schema: {fc_schema}')
+        return {'ints':ints, 'decimals':decimals, 'datetimes':datetimes, 'fc_schema':fc_schema}
+
 
     def get_feature(self, feature_name, **kwargs):
         """
@@ -468,7 +533,7 @@ class WFS:
         if self.bboxes is None:
             self.bboxes = [self.__get_bbox(feature_name)]
         if self.__debug: print(f'Bounding boxes: {self.bboxes}')
-        feature_name = self.__feature_translations[feature_name]
+        # feature_name = self.__feature_translations[feature_name]
         gdfs = []
         bboxes = self.bboxes.copy()
         if count is not None:
@@ -496,4 +561,14 @@ class WFS:
 
         if clip_gdf and self.__missing_default_bbox is False and len(gdf) > 0:
             gdf = self.__clip_gdf(gdf)
+
+        desc = self.__descripe_feature(feature_name)
+        if len(gdf) > 0:
+            for col in gdf.columns.to_list():
+                if col in desc['datetimes']:
+                    try:
+                        gdf[col] = pd.to_datetime(gdf[col]).dt.tz_localize(None)
+                    except:
+                        print(f'Could not convert {col} to datetime')
+                        pass
         return gdf        
