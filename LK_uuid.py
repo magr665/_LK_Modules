@@ -9,7 +9,7 @@
 import uuid
 import os
 
-def getUUID():
+def getUUID(uuidpath=None):
     """
     `getUUID`-funktionen genererer eller henter en unik UUID (Universally Unique Identifier) fra en fil kaldet `uuid.txt`, 
     som placeres i mappen over det aktuelle script. Hvis `uuid.txt` allerede eksisterer, læser funktionen UUID'en fra filen 
@@ -34,13 +34,9 @@ def getUUID():
     """
 
     try:
-        try:
-            basePath = os.path.dirname(os.path.realpath(__file__))
-        except:
-            basePath = os.path.abspath('')
-        # with open()
-        parentPath = os.path.dirname(basePath)
-        uuid_file = os.path.join(parentPath, 'uuid.txt')
+        if uuidpath is None:
+            return None
+        uuid_file = os.path.join(uuidpath, 'uuid.txt')
         if os.path.exists(uuid_file):
             this_uuid = open(uuid_file, 'r').read()
             return this_uuid

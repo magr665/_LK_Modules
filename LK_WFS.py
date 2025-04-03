@@ -568,7 +568,35 @@ class WFS:
                 if col in desc['datetimes']:
                     try:
                         gdf[col] = pd.to_datetime(gdf[col]).dt.tz_localize(None)
+                        continue
                     except:
-                        print(f'Could not convert {col} to datetime')
-                        pass
+                        if self.__debug:
+                            print(f'Could not convert {col} to datetime')
+                            print('trying to convert to datetime with errors=coerce')
+                        try:
+                            gdf[col] = pd.to_datetime(gdf[col], errors='coerce').dt.tz_localize(None)
+                            continue
+                        except:
+                            if self.__debug:
+                                print(f'Could not convert {col} to datetime with errors=coerce')
+                                print('Trying to convert to datetime with fomat 2020-06-14T11:18:45.344+02:00')
+                            try:
+                                gdf[col] = pd.to_datetime(gdf[col], format='%Y-%m-%dT%H:%M:%S.%f%z').dt.tz_localize(None)
+                                continue
+                            except:
+                                if self.__debug:
+                                    print(f'Could not convert {col} to datetime with format 2020-06-14T11:18:45.344+02:00')
+                                    print('trying a last thing')
+                                try:
+                                    ## remove all after + and remove the T
+                                    gdf[col] = pd.to_datetime(gdf[col].str.split('+').str[0].str.replace('T', ' '), errors='coerce')
+                                    continue
+                                except:
+                                    if self.__debug: print(f'Could not convert {col} to datetime with last resort')
+                                    continue
+                        
+                
+                        
+
+        gdf.columns = [col[:30] for col in gdf.columns]
         return gdf        
