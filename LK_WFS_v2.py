@@ -15,6 +15,7 @@ Parametre ved initialisering:
     bbox (list, optional): Bounding box [minx, miny, maxx, maxy]
     debug (bool, optional): Debug mode, default False
     maxfeatures (int, optional): Max antal features per forespørgsel
+    outputformat (str, optional): Output format --> Prøv at bruge 'json' hvis den ellers ikke virker
     params (dict, optional): Ekstra parametre til WFS forespørgsler
 
 Eksempel:
@@ -23,6 +24,10 @@ Eksempel:
                   password='pass',
                   bbox=[570000, 6200000, 580000, 6210000])
     >>> gdf = wfs.get_feature('kommuner')
+
+    params kan f.eks. være:
+    >>> params = {'whoami': 'Lemvig Kommune'}
+
 
 Bemærk:
     Kræver geopandas, pandas, requests, lxml, shapely og fiona installeret
@@ -60,6 +65,12 @@ class WFSClient:
         self.url = url
         for key, value in kwargs.items():
             setattr(self, key, value)
+
+        ## check for outputformat
+        if hasattr(self, 'outputformat'):
+            self.__outputFormat = self.outputformat
+        else:
+            self.__outputFormat = None
 
         ## check if debug is set
         if hasattr(self, 'debug'):
@@ -309,6 +320,7 @@ class WFSClient:
         Raises:
             ValueError: Hvis GeoDataFrame ikke kan læses fra WFS-responsen
         """
+        if self.__debug: print('Getting DescribeFeatureType')
         params = self.__params
         params['request'] = 'DescribeFeatureType'
         params['version'] = self.version
@@ -316,6 +328,7 @@ class WFSClient:
             params['typename'] = feature_name
         else:
             params['typeNames'] = feature_name
+        if self.__debug: print('params:', params)
         wfs_url = requests.Request('GET', self.url, params=params).prepare().url
         if self.__debug: 
             print('Getting DescribeFeatureType')
@@ -355,6 +368,9 @@ class WFSClient:
             params['typeName'] = feature_name
         else:
             params['typeNames'] = feature_name
+
+        if self.__outputFormat and self.__outputFormat.lower() == 'json':
+            params['outputFormat'] = 'json'
         
         wfs_url = requests.Request('GET', self.url, params=params).prepare().url
         if self.__debug: print('___get_features_gdf', wfs_url)
@@ -418,10 +434,14 @@ class WFSClient:
                     gdfs.append(gdf)
         self.gdfs = gdfs
         gdf = pd.concat(gdfs, ignore_index=True)
+        if self.__debug: print(f'Number of features: {len(gdf)}')
         gdf.drop_duplicates(inplace=True)
         for col in gdf.columns.to_list():
-            if '.' in col:
-                gdf.rename(columns={col: col.replace('.', '_')}, inplace=True)
+            if self.__debug:
+                print("Original columns:", gdf.columns.to_list())
+            gdf.rename(columns={col: col.replace('.', '_').replace('-', '_') for col in gdf.columns}, inplace=True)
+            if self.__debug:
+                print("Renamed columns:", gdf.columns.to_list())
 
         gdf['xTid'] = pd.Timestamp.now()
         if clip_gdf and len(gdf) > 0:
