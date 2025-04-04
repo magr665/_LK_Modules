@@ -376,9 +376,12 @@ class WFSClient:
         if self.__debug: print('___get_features_gdf', wfs_url)
         try:
             return gpd.read_file(wfs_url, crs="EPSG:25832")
-        except:
+        except ValueError as e:
+            if str(e) == "Null layer: ''":
+                raise ValueError('No features found in WFS response')
+        except Exception as e:
             # return gpd.read_file(wfs_url)
-            raise ValueError('Could not read GeoDataFrame from WFS response')
+            raise Exception('Could not read GeoDataFrame from WFS response')
 
     def get_features(self, feature_name, **kvargs):
         """
@@ -421,6 +424,9 @@ class WFSClient:
                     if self.__debug: print(f'Number of features ({hits}) is greater than maxfeatures ({self.maxfeatures}), splitting bounding box')
                     for bb in self.__split_bbox(bbox):
                         bboxes.append(bb)
+                elif hits == 0:
+                    if self.__debug: print(f'No features found in bounding box: {bbox}')
+                    continue
                 else:
                     gdf = self.__get_feature(feature_name, bbox)
                     gdfs.append(gdf)
@@ -432,6 +438,8 @@ class WFSClient:
                         bboxes.append(bb)
                 else:
                     gdfs.append(gdf)
+        if len(gdfs) == 0:
+            raise ValueError('No features found in WFS response')
         self.gdfs = gdfs
         gdf = pd.concat(gdfs, ignore_index=True)
         if self.__debug: print(f'Number of features: {len(gdf)}')
